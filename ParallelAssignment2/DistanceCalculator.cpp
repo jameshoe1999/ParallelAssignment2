@@ -2,6 +2,8 @@
 #include <cmath>
 #include <vector>
 
+#define EPSILON 0.1
+
 using namespace std;
 
 double* DISTANCES;
@@ -49,4 +51,26 @@ double getPointsDistance(int x, int y)
 	int Y = min(x, y), X = max(x, y);
 	int offset = (Y * (Y + 1) / 2) + 1;
 	return DISTANCES[Y * (N - 1) + X - offset];
+}
+
+/*
+* To compare both floating point values
+* If the absolute difference is less than EPSILON
+* We will consider both values are the same.
+*/
+int isAlmostTheSame(double num1, double num2)
+{
+	return abs(num1 - num2) <= EPSILON;
+}
+
+int isDifferent(double num1, double num2) {
+	return (num2 - num1) > EPSILON;
+}
+
+template <typename T>
+T pop(vector<T>* list)
+{
+	T item = list->back();
+	list->pop_back();
+	return item;
 }
