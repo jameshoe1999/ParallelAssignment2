@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cmath>
 #include <vector>
+#include <queue>
 
 #define EPSILON 0.1
 
@@ -13,6 +14,7 @@ struct Point {
 	int index = 0;
 	int x = 0;
 	int y = 0;
+	int successor = 0;
 };
 
 double calculateDistance(Point* point1, Point* point2)
@@ -74,3 +76,39 @@ T pop(vector<T>* list)
 	list->pop_back();
 	return item;
 }
+
+vector<Point*>* travel(queue<Point*>* points, const double GOAL)
+{
+	size_t POINTS_SIZE = points->size();
+	Point* first = points->front();
+	points->pop();
+	first->successor = points->size();
+	vector<Point*>* solution = new vector<Point*>{ first };
+	vector<Point*>* explored = new vector<Point*>();
+	double goal = 0;
+	while (!points->empty()) {
+		Point* current = points->front();
+		points->pop();
+		current->successor = POINTS_SIZE = solution->size() - 1;
+		double distance = getPointsDistance(current->index, solution->back()->index);
+		if (isDifferent(distance + goal, GOAL)) {
+			solution->back()->successor--;
+			while (solution->back()->successor == 0) {
+				current = pop(solution);
+				goal -= getPointsDistance(current->index, solution->back()->index);
+				solution->back()->successor--;
+				points->push(current);
+			}
+		}
+		else {
+			goal += distance;
+			solution->push_back(current);
+		}
+		if (isAlmostTheSame(goal, GOAL)) {
+			return solution;
+		}
+	}
+	return NULL;
+}
+
+
