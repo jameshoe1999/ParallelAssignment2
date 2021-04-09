@@ -6,8 +6,10 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <stack>
-#include <queue>
+#include <deque>
+#include <omp.h>
+#include <thread>
+#include <Windows.h>
 
 // determine the output accuracy
 // a smaller value usually leads to performance downgrade
@@ -18,7 +20,8 @@ using namespace std;
 // the output should match this with smallest difference
 double CHALLENGE = 0.0;
 double* DISTANCES;
-int N;
+int N = 0;
+int NUM_THREADS = thread::hardware_concurrency();
 
 /*
  * Simple struct to store each point info
@@ -29,7 +32,13 @@ struct Point {
 	int index = 0;
 	int x = 0;
 	int y = 0;
+	int* successors;
 };
+
+void setNumThreads(int points_size) 
+{
+	NUM_THREADS = min(thread::hardware_concurrency(), max(2, (int)(points_size / 15)));
+}
 
 /*
 * To compare both floating point values
@@ -48,38 +57,29 @@ int isOverChallenge(double num) {
 	return (num - CHALLENGE) > EPSILON;
 }
 
-// distance between two points on a plane
-double calculateDistance(Point point1, Point point2)
-{
-	return sqrt(pow((point2.x - point1.x), 2) + pow((point2.y - point1.y), 2));
-}
-
 double calculateDistance(Point* point1, Point* point2)
 {
 	return sqrt(pow((point2->x - point1->x), 2) + pow((point2->y - point1->y), 2));
 }
 
-void calculateAllDistances(vector<Point*>* points)
+void calculateAllDistances(deque<Point*>* points)
 {
-	N = points->size();
-	size_t counter = 0;
-	// As we only need the triangle numbers
-	const size_t SIZE = N * (N - 1) / 2;
+	const int SIZE = N * (N - 1) / 2;
+	const int ROWNUM = SIZE / N;
 	DISTANCES = new double[SIZE];
-	vector<Point*>::iterator outerPtr = points->begin();
-	while (outerPtr != points->end())
+	// As we only need the triangle numbers
+	#pragma omp parallel for num_threads(NUM_THREADS)
+	for (int i = 0; i < N; i++)
 	{
-		Point* x = *outerPtr;
-		outerPtr++;
-		vector<Point*>::iterator innerPtr = outerPtr;
-		while (innerPtr != points->end())
+		Point* x = points->at(i);
+		int offset = (i * (i + 1) / 2) + 1;
+		for (int n = i + 1; n < N; n++)
 		{
-			Point* y = *innerPtr;
-			if (counter < SIZE) {
-				DISTANCES[counter] = calculateDistance(x, y);
+			Point* y = points->at(n);
+			int pos = i * (N - 1) + n - offset;
+			if (pos < SIZE) {
+				DISTANCES[pos] = calculateDistance(x, y);
 			}
-			counter++;
-			innerPtr++;
 		}
 	}
 }
@@ -90,19 +90,6 @@ double getPointsDistance(int x, int y)
 	int Y = min(x, y), X = max(x, y);
 	int offset = (Y * (Y + 1) / 2) + 1;
 	return DISTANCES[Y * (N - 1) + X - offset];
-}
-
-double recalculateListDist(vector<Point*> list)
-{
-	double distance = 0.0;
-	Point* currentP = list.back(); 
-	list.pop_back();
-	for (Point*& p : list)
-	{
-		distance += calculateDistance(*currentP, *p);
-		currentP = p;
-	}
-	return distance;
 }
 
 /*
@@ -119,33 +106,37 @@ Point* parsePoint(string line)
 	point->index = stoi(line.substr(0, space));
 	point->x = stoi(line.substr(space + 1, len - space2 + 1));
 	point->y = stoi(line.substr(space2 + 1));
+	point->successors = new int[NUM_THREADS];
 	return point;
 }
 
 /*
 * Read file, store points in Point objects, store challenge
 */
-void readFile(ifstream& file, string filename, vector<Point*>* points, double& goal)
+deque<Point*>* readFile(ifstream& file, string filename)
 {
 	file.open(filename);
 	if (file.fail()) {
 		cout << "Failed to open the file." << endl;
-		return;
+		exit(-1);
 	}
 	string line;
+	deque<Point*>* points = new deque<Point*>();
+	int counter = 0;
 	while (getline(file, line))
 	{
 		if (line.size() == 0) {
 			continue;
 		}
 		else if (line.find(' ') == -1) {
-			goal = stod(line);
-			return;
+			CHALLENGE = stod(line);
+			break;
 		}
-		Point* point = parsePoint(line);
-		points->push_back(point);
+		points->push_back(parsePoint(line));
 	}
+	N = points->size();
 	file.close();
+	return points;
 }
 
 /*
@@ -160,58 +151,111 @@ void printSolution(ostream& output, vector<Point*>* solution)
 	}
 }
 
-vector<Point*> findCombination(vector<Point*> list)
-{
-	vector<Point*> visited;
-	double travelled = 0.0;
-	int counter = 0;
-	int index = 0;
-	while (isCloseToChallenge(travelled))
-	{
-		Point* curP = list.front();
-		visited.push_back(curP);
-		list.erase(list.begin());
-		index++;
-		if (visited.size() < 1) continue;
 
-		counter++;
-		double distance = calculateDistance(*curP, *(*visited.end() - 2));
-		travelled += distance;  
-		
-		if (isOverChallenge(travelled)) {
-			if (visited.size() == list.size()) {
-				visited.erase(visited.end() - counter, visited.end());
-				travelled = recalculateListDist(visited);
-				counter = 0;
-			}
-			else {
-				visited.pop_back();
-				travelled -= distance;
+Point* popBack(vector<Point*>* list)
+{
+	Point* item = list->back();
+	list->pop_back();
+	return item;
+}
+
+/*
+* This method is essential to mark
+* down the number of remaining items
+* in the list as the successor of the
+* popped item.
+*/
+
+Point* popFront(deque<Point*>* list)
+{
+	Point* item = list->front();
+	list->pop_front();
+	item->successors[omp_get_thread_num()] = list->size();
+	return item;
+}
+
+vector<Point*>* travel(deque<Point*>* points, volatile int &stopFlag)
+{
+	vector<Point*>* solution = new vector<Point*>{ popFront(points) };
+	Point* item = NULL;
+	double goal = 0, distance = 0;
+	while (!points->empty() && !stopFlag) {
+		item = popFront(points);
+		distance = getPointsDistance(item->index, solution->back()->index);
+		if (isOverChallenge(distance + goal)) {
+			points->push_back(item);
+			solution->back()->successors[omp_get_thread_num()]--;
+			while (solution->size() > 0) {
+				if (solution->back()->successors[omp_get_thread_num()] <= 0) {
+					Point* point = popBack(solution);
+					points->push_back(point);
+					if (solution->empty()) {
+						solution->push_back(popFront(points));
+						goal = 0;
+						break;
+					}
+					goal -= getPointsDistance(point->index, solution->back()->index);
+					solution->back()->successors[omp_get_thread_num()]--;
+				}
+				else {
+					break;
+				}
 			}
 		}
 		else {
-			index++;
+			goal += distance;
+			solution->push_back(item);
+		}
+
+		if (isCloseToChallenge(goal)) {
+			return solution;
 		}
 	}
-	return visited;
+	delete(solution);
+	return NULL;
+}
+
+/*
+* 
+*/
+vector<Point*>* findSolution(deque<Point*>* points) 
+{
+	vector<Point*>* solution = NULL;
+	int* solutionSizes = new int[N];
+	volatile int max = 0, shouldStop = 0;
+	#pragma omp parallel for num_threads(NUM_THREADS)
+	for (int i = 0; i < N; i++)
+	{
+		deque<Point*>* rotated = new deque<Point*>(*points);
+		rotate(rotated->begin(), rotated->begin() + i, rotated->end());
+		vector<Point*>* temp = travel(rotated, shouldStop);
+		if (temp != NULL) {
+			if (temp->size() > max) {
+				#pragma omp critical
+				solution = temp;
+				max = temp->size();
+				if (temp->size() == N) {
+					shouldStop = 1;
+					break;
+				}
+			}
+		}
+	}
+	return solution;
 }
 
 int main()
 {
 	ifstream stream;
-	vector<Point*>* points = new vector<Point*>();
-	
-	readFile(stream, "Challenge.txt", points, CHALLENGE);
+	vector<Point*>* solution;
+	deque<Point*>* points = readFile(stream, "Challenge.txt");
+	setNumThreads(points->size());
 	calculateAllDistances(points);
-
-	size_t N = points->size();
-	size_t P = (size_t) pow(N, 2);
-	for (size_t i = 0; i < N - 1; i++)
-	{
-		for (size_t n = i + 1; n < N; n++)
-		{
-			printf("(%d, %d) --> %.5f\n", i, n, getPointsDistance(i, n));
-		}
+	solution = findSolution(points);
+	if (solution != NULL) {
+		ofstream output;
+		output.open("Solution.txt");
+		printSolution(output, solution);
 	}
 	return 0;
 }
